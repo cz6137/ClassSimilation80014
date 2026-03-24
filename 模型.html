@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>太阳直射点与地球光照演示（昼夜分界版）</title>
+  <style>
+    body{font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans CJK SC", sans-serif; margin:0; background:#0f1724; color:#e6eef6}
+    header{padding:12px 20px;background:linear-gradient(90deg,#0b1220,#112235);box-shadow:0 2px 8px rgba(0,0,0,.6)}
+    header h1{margin:0;font-size:18px}
+    #wrap{display:grid;grid-template-columns:480px 1fr;gap:12px;padding:12px}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:10px;padding:12px;box-shadow:0 6px 18px rgba(2,6,23,.6)}
+    #declination{width:100%;height:300px}
+    #globe{width:100%;height:500px}
+    .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+    .btn{padding:6px 10px;border-radius:6px;border:0;background:#1f6feb;color:white;cursor:pointer}
+    .btn.secondary{background:#2d3748}
+    label{font-size:13px;display:flex;align-items:center;gap:4px}
+    .date-slider{flex:1;min-width:120px}
+    .date-display{min-width:80px;text-align:center;color:#a9c2d6}
+    #info{margin-top:8px;font-size:13px}
+    footer{padding:10px;color:#9fb0c8;font-size:13px;text-align:center}
+    .small{font-size:12px;color:#9fb0c8}
+  </style>
+
+  <!-- 1. ES模块配置（Three.js兼容修复） -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <!-- 2. 引入依赖库 -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>太阳直射点与地球光照演示 — 昼夜分界版</h1>
+  </header>
+  <div id="wrap">
+    <!-- 图一：直射点曲线 + 日期滑条 -->
+    <div class="card">
+      <h3>图一 — 太阳直射点移动（年内动态）</h3>
+      <svg id="declination"></svg>
+      <div class="controls">
+        <label class="small">
+          日期：<span id="dateDisplay1" class="date-display">3月21日</span>
+          <input id="daySlider1" class="date-slider" type="range" min="0" max="365" value="80" />
+        </label>
+        <div style="width:10px"></div>
+        <button class="btn" data-day="79">春分</button>
+        <button class="btn" data-day="172">夏至</button>
+        <button class="btn" data-day="265">秋分</button>
+        <button class="btn" data-day="355">冬至</button>
+      </div>
+      <div id="info" class="small">直射点纬度：<strong id="declText">0.00°</strong></div>
+      <hr style="border:none;height:1px;background:rgba(255,255,255,0.04);margin:8px 0">
+      <div class="small">说明：滑条调节全年日期，曲线为太阳直射点纬度变化；点击节气按钮可快速跳转。</div>
+    </div>
+    <!-- 图二：地球光照 + 日期滑条（替换原输入框） -->
+    <div class="card">
+      <h3>图二 — 地球光照与昼夜（昼夜分界可视化）</h3>
+      <div id="globe"></div>
+      <div class="controls">
+        <label class="small">
+          日期：<span id="dateDisplay2" class="date-display">3月21日</span>
+          <input id="daySlider2" class="date-slider" type="range" min="0" max="365" value="80" />
+        </label>
+        <label class="small">
+          时间：<input id="timeInput" type="number" min="0" max="23" value="12" style="width:60px">时
+        </label>
+        <button class="btn secondary" id="syncBtn">与上图强制同步</button>
+        <label class="small">
+          视角：
+          <select id="latView" class="small">
+            <option value="0">赤道</option>
+            <option value="23.44">北回归线</option>
+            <option value="-23.44">南回归线</option>
+            <option value="66.56">北极圈</option>
+            <option value="90">北极点</option>
+          </select>
+        </label>
+      </div>
+      <div id="globeInfo" class="small" style="margin-top:8px">光照状态：<span id="illumText">太阳赤纬 0.00°，全球昼夜近似等长</span></div>
+      <div class="small" style="margin-top:8px">说明：赤道、回归线和极圈线条在昼半球显示为红色，在夜半球显示为蓝色。</div>
+    </div>
+  </div>
+  <footer class="small">教学用 — 直射点公式：δ = 23.44° × sin(2π × (n-80)/365)（n为年内天数）</footer>
+
+  <!-- 3. 核心逻辑：图一直射点曲线 + 全局函数 -->
+  <script>
+    // ---------- 全局工具函数（图一/图二共用） ----------
+    window.deg = (r) => r * 180 / Math.PI;
+    window.rad = (d) => d * Math.PI / 180;
+    // 太阳赤纬计算（直射点纬度）
+    function solarDeclination(dayOfYear) {
+      const tilt = 23.44; // 黄赤交角
+      return tilt * Math.sin(2 * Math.PI * (dayOfYear - 80) / 365);
+    }
+    window.solarDeclination = solarDeclination;
+    // 年内天数转直观日期（如"3月21日"）
+    function dayToDate(day) {
+      const start = new Date(new Date().getFullYear(), 0, 1);
+      const target = new Date(start.getTime() + day * 24 * 3600 * 1000);
+      return `${target.getMonth() + 1}月${target.getDate()}日`;
+    }
+    window.dayToDate = dayToDate; // 暴露给图二调用
+    // 全局更新方法（解决图二调用图一方法未定义问题）
+    window.updateFromDay = function(day) {
+      const decl = solarDeclination(day);
+      document.getElementById('declText').textContent = (decl >= 0 ? decl.toFixed(2) + '°N' : (-decl).toFixed(2) + '°S');
+    };
+
+    // ---------- 图一：直射点曲线（D3.js，最终优化标签） ----------
+    (function () {
+      const svg = d3.select('#declination');
+      const width = 440, height = 300;
+      const margin = { top: 20, right: 80, left: 60, bottom: 50 }; 
+      svg.attr('viewBox', `0 0 ${width} ${height}`);
+      const g = svg.append('g');
+
+      // 坐标轴配置（仅保留1月和12月刻度）
+      const xScale = d3.scaleLinear().domain([0, 365]).range([margin.left, width - margin.right]);
+      const yScale = d3.scaleLinear().domain([-25, 25]).range([height - margin.bottom, margin.top]);
+
+      // 绘制Y轴（显示南北纬，如"20°N""20°S"）
+      const yAxis = d3.axisLeft(yScale).ticks(5).tickFormat(d => {
+        if (d > 0) return `${d}°N`;
+        else if (d < 0) return `${-d}°S`;
+        else return '0°';
+      });
+      g.append('g')
+        .attr('transform', `translate(${margin.left}, 0)`)
+        .call(yAxis)
+        .attr('color', '#9fb0c8');
+
+      // 绘制X轴（仅保留1月和12月标签）
+      const xAxis = d3.axisBottom(xScale).ticks(2).tickValues([0, 365]).tickFormat((d, i) => {
+        const months = ['1月', '12月'];
+        return months[i];
+      });
+      g.append('g')
+        .attr('transform', `translate(0, ${height - margin.bottom})`)
+        .call(xAxis)
+        .attr('color', '#9fb0c8');
+
+      // 辅助线（赤道、回归线）
+      g.append('line')
+        .attr('x1', xScale(0))
+        .attr('x2', xScale(365))
+        .attr('y1', yScale(0))
+        .attr('y2', yScale(0))
+        .attr('stroke', 'rgba(255,255,255,0.1)');
+      g.append('line')
+        .attr('x1', xScale(0))
+        .attr('x2', xScale(365))
+        .attr('y1', yScale(23.44))
+        .attr('y2', yScale(23.44))
+        .attr('stroke', 'rgba(255,200,100,0.15)')
+        .attr('stroke-dasharray', '4 3');
+      g.append('line')
+        .attr('x1', xScale(0))
+        .attr('x2', xScale(365))
+        .attr('y1', yScale(-23.44))
+        .attr('y2', yScale(-23.44))
+        .attr('stroke', 'rgba(100,200,255,0.15)')
+        .attr('stroke-dasharray', '4 3');
+
+      // 辅助线标签（彻底解决重叠，调整位置和字体）
+      g.append('text').attr('x', width - margin.right).attr('y', yScale(0) - 6).attr('text-anchor', 'end').attr('fill','#a9c2d6').text('赤道');
+      g.append('text').attr('x', width - margin.right).attr('y', yScale(23.44) - 6).attr('text-anchor', 'end').attr('fill','#f2d08a').text('北回归线');
+      // 南回归线与冬至标签：南回归线左移，冬至上移，且仅保留一个冬至标签
+      g.append('text').attr('x', width - margin.right - 30).attr('y', yScale(-23.44) - 6).attr('text-anchor', 'end').attr('fill','#9fd2ff').style('font-size', '12px').text('南回归线');
+      g.append('text').attr('x', width - margin.right).attr('y', yScale(-23.44) + 4).attr('text-anchor', 'end').attr('fill','#9fd2ff').style('font-size', '12px').text('冬至');
+
+      // 直射点曲线
+      const data = d3.range(0, 366).map(d => ({ day: d, decl: solarDeclination(d) }));
+      g.append('path')
+        .datum(data)
+        .attr('d', d3.line().x(d => xScale(d.day)).y(d => yScale(d.decl)).curve(d3.curveNatural))
+        .attr('fill', 'none')
+        .attr('stroke', '#74c0fc')
+        .attr('stroke-width', 2.5);
+
+      // 节气标记（仅保留必要标签，避免重复）
+      const terms = [
+        { name: '春分', day: 79, color: '#87e8de' },
+        { name: '夏至', day: 172, color: '#f2d08a' },
+        { name: '秋分', day: 265, color: '#87e8de' },
+        { name: '冬至', day: 355, color: '#9fd2ff' }
+      ];
+      terms.forEach(term => {
+        g.append('circle')
+          .attr('cx', xScale(term.day))
+          .attr('cy', yScale(solarDeclination(term.day)))
+          .attr('r', 5)
+          .attr('fill', term.color)
+          .attr('stroke', '#fff')
+          .attr('stroke-width', 1);
+        g.append('text')
+          .attr('x', xScale(term.day))
+          .attr('y', yScale(solarDeclination(term.day)) - 10)
+          .attr('text-anchor', 'middle')
+          .attr('fill', term.color)
+          .text(term.name);
+      });
+
+      // 可移动直射点标记
+      const marker = g.append('g');
+      marker.append('circle')
+        .attr('r', 6)
+        .attr('fill', '#ffeb3b')
+        .attr('stroke', '#ffc107')
+        .attr('stroke-width', 1.5);
+      marker.append('text')
+        .attr('x', 10)
+        .attr('y', 4)
+        .attr('fill', '#fff')
+        .text('直射点');
+
+      // ---------- 图一滑条交互（核心：同步图二） ----------
+      const daySlider1 = document.getElementById('daySlider1');
+      const dateDisplay1 = document.getElementById('dateDisplay1');
+      const declText = document.getElementById('declText');
+
+      function updateChart(day) {
+        day = Math.max(0, Math.min(365, day));
+        daySlider1.value = day;
+        
+        const decl = solarDeclination(day);
+        marker.select('circle').attr('cx', xScale(day)).attr('cy', yScale(decl));
+        marker.select('text').attr('x', xScale(day) + 10).attr('y', yScale(decl) + 4);
+        dateDisplay1.textContent = dayToDate(day);
+        declText.textContent = (decl >= 0 ? decl.toFixed(2) + '°N' : (-decl).toFixed(2) + '°S');
+        
+        // 同步图二
+        const daySlider2 = document.getElementById('daySlider2');
+        if (daySlider2.value != day) daySlider2.value = day;
+        document.getElementById('dateDisplay2').textContent = dayToDate(day);
+        
+        // 触发图二更新
+        window.dispatchEvent(new CustomEvent('date-updated', { 
+          detail: { day: day, hour: +document.getElementById('timeInput').value } 
+        }));
+      }
+
+      // 滑条实时响应
+      daySlider1.addEventListener('input', (e) => updateChart(+e.target.value));
+      // 节气按钮跳转
+      document.querySelectorAll('.btn[data-day]').forEach(btn => {
+        btn.addEventListener('click', () => updateChart(+btn.getAttribute('data-day')));
+      });
+
+      // 初始化图一
+      updateChart(80);
+    })();
+  </script>
+
+  <!-- 4. 图二：三维地球（昼夜分界线版本） -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // 全局变量（确保光照更新时可访问）
+    let scene, camera, renderer, sunLight, nightMesh, controls;
+    let latitudeLines = []; // 存储纬线对象
+
+    // 等待页面完全加载（避免DOM未就绪）
+    window.addEventListener('load', initGlobe);
+
+    function initGlobe() {
+      const container = document.getElementById('globe');
+      const width = container.clientWidth;
+      const height = 500;
+
+      // ---------- 1. 基础环境初始化（修复交互无反应） ----------
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x08121b);
+
+      // 相机（固定初始视角，避免偏移）
+      camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 1000);
+      camera.position.set(0, 0, 4.0);
+
+      // 渲染器（启用抗锯齿，提升画质）
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(width, height);
+      container.appendChild(renderer.domElement);
+
+      // 轨道控制器（关键修复：确保拖动响应）
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enablePan = false;
+      controls.minDistance = 2;
+      controls.maxDistance = 10;
+      controls.autoRotate = false;
+      controls.enableDamping = true; // 新增：拖动后平滑减速，提升体验
+      controls.dampingFactor = 0.05;
+      controls.update();
+
+      // ---------- 2. 光源系统（彻底修复双重阴影） ----------
+      // 环境光（提升基础亮度，避免暗部过黑）
+      const ambientLight = new THREE.AmbientLight(0x666666);
+      scene.add(ambientLight);
+
+      // 平行光（模拟太阳光，核心修复：仅保留单侧光照）
+      sunLight = new THREE.DirectionalLight(0xffffcc, 1.5); // 暖白色光，强度1.5
+      scene.add(sunLight);
+
+      // ---------- 3. 地球模型（重构黑夜层逻辑） ----------
+      // 地球几何体（高分段，更平滑）
+      const earthGeo = new THREE.SphereGeometry(1, 64, 64);
+      earthGeo.computeVertexNormals(); // 修复：计算法向量，确保光照均匀
+
+      // 地球纹理（稳定CDN，添加纹理重复优化）
+      const textureLoader = new THREE.TextureLoader();
+      const earthTexture = textureLoader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg');
+      earthTexture.wrapS = THREE.ClampToEdgeWrapping;
+      earthTexture.wrapT = THREE.ClampToEdgeWrapping;
+      const earthMat = new THREE.MeshLambertMaterial({ 
+        map: earthTexture,
+      });
+      const earthMesh = new THREE.Mesh(earthGeo, earthMat);
+      scene.add(earthMesh);
+
+      // 重构黑夜层：仅用单一平面实现单侧阴影，避免球体自身重叠
+      const nightPlaneGeo = new THREE.PlaneGeometry(2, 2); // 与地球等大的平面
+      const nightMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.BackSide // 仅显示背面（朝向太阳的一侧为白天，背侧为黑夜）
+      });
+      nightMesh = new THREE.Mesh(nightPlaneGeo, nightMat);
+      nightMesh.position.set(0, 0, 0);
+      nightMesh.lookAt(sunLight.position); // 始终面向太阳，确保阴影方向正确
+      scene.add(nightMesh);
+
+      // ---------- 新增：添加赤道、回归线和极圈（昼夜分界版本） ----------
+      function addLatitudeLine(latitude) {
+        const radius = 1.01; // 略大于地球半径，确保可见
+        const segments = 180; // 增加分段数，使线条更平滑
+        
+        // 创建昼半球线条（红色）
+        const dayGeometry = new THREE.BufferGeometry();
+        const dayPoints = [];
+        
+        // 创建夜半球线条（蓝色）
+        const nightGeometry = new THREE.BufferGeometry();
+        const nightPoints = [];
+        
+        // 计算昼夜分界线位置（根据太阳位置）
+        const dayNightBoundary = calculateDayNightBoundary();
+        
+        for (let i = 0; i <= segments; i++) {
+          const theta = (i / segments) * Math.PI * 2;
+          const phi = (90 - latitude) * Math.PI / 180;
+          
+          const x = radius * Math.sin(phi) * Math.cos(theta);
+          const y = radius * Math.cos(phi);
+          const z = radius * Math.sin(phi) * Math.sin(theta);
+          
+          // 判断该点是在昼半球还是夜半球
+          const point = new THREE.Vector3(x, y, z);
+          const isDay = isPointInDayHemisphere(point, dayNightBoundary);
+          
+          if (isDay) {
+            dayPoints.push(new THREE.Vector3(x, y, z));
+          } else {
+            nightPoints.push(new THREE.Vector3(x, y, z));
+          }
+        }
+        
+        // 昼半球线条（红色）
+        if (dayPoints.length > 0) {
+          dayGeometry.setFromPoints(dayPoints);
+          const dayMaterial = new THREE.LineBasicMaterial({
+            color: 0xff0000,
+            linewidth: 2
+          });
+          const dayLine = new THREE.Line(dayGeometry, dayMaterial);
+          scene.add(dayLine);
+          
+          // 夜半球线条（蓝色）
+          nightGeometry.setFromPoints(nightPoints);
+          const nightMaterial = new THREE.LineBasicMaterial({
+            color: 0x0000ff,
+            linewidth: 2
+          });
+          const nightLine = new THREE.Line(nightGeometry, nightMaterial);
+          scene.add(nightLine);
+          
+          // 存储线条对象，以便后续更新
+          latitudeLines.push({
+            latitude: latitude,
+            dayLine: dayLine,
+            nightLine: nightLine
+          });
+        }
+      }
+
+      // 计算昼夜分界线（晨昏线）- 修复版本
+      function calculateDayNightBoundary() {
+        // 昼夜分界线是一个垂直于太阳光方向的平面
+        // 在春分和秋分时，这个平面应该通过地球中心，与赤道平面垂直
+        const sunDirection = sunLight.position.clone().normalize();
+        
+        // 计算昼夜分界平面的法向量（与太阳方向垂直）
+        // 在春分和秋分时，这个法向量应该与地球自转轴平行
+        const decl = window.solarDeclination(+document.getElementById('daySlider2').value);
+        
+        // 如果太阳直射点在赤道（春分/秋分），昼夜分界线应该与经线平行
+        if (Math.abs(decl) < 0.1) {
+          // 春分/秋分时，昼夜分界线是经过两极的大圆
+          return new THREE.Vector3(0, 1, 0); // 与Y轴（地球自转轴）平行
+        } else {
+          // 其他时间，昼夜分界线与太阳方向垂直
+          return sunDirection;
+        }
+      }
+
+      // 判断点是否在昼半球 - 修复版本
+      function isPointInDayHemisphere(point, dayNightBoundary) {
+        const sunDirection = sunLight.position.clone().normalize();
+        
+        // 在春分和秋分时，使用特殊逻辑确保所有纬线昼夜平分
+        const decl = window.solarDeclination(+document.getElementById('daySlider2').value);
+        
+        if (Math.abs(decl) < 0.1) {
+          // 春分/秋分时，使用简单的经度判断
+          // 计算点的经度（从-180°到180°）
+          const longitude = Math.atan2(point.z, point.x) * 180 / Math.PI;
+          // 太阳在正午12点时位于0°经度
+          const sunLongitude = 0; // 假设太阳在0°经度
+          // 昼半球是经度-90°到90°的范围
+          let dayLongitudeStart = sunLongitude - 90;
+          let dayLongitudeEnd = sunLongitude + 90;
+          
+          // 处理经度环绕
+          if (dayLongitudeStart < -180) dayLongitudeStart += 360;
+          if (dayLongitudeEnd > 180) dayLongitudeEnd -= 360;
+          
+          if (dayLongitudeStart < dayLongitudeEnd) {
+            return longitude >= dayLongitudeStart && longitude <= dayLongitudeEnd;
+          } else {
+            return longitude >= dayLongitudeStart || longitude <= dayLongitudeEnd;
+          }
+        } else {
+          // 其他时间使用正常的点积判断
+          return point.dot(sunDirection) > 0;
+        }
+      }
+
+      // 更新所有纬线的昼夜分界
+      function updateLatitudeLines() {
+        const dayNightBoundary = calculateDayNightBoundary();
+        
+        // 移除所有旧的纬线
+        latitudeLines.forEach(line => {
+          scene.remove(line.dayLine);
+          scene.remove(line.nightLine);
+        });
+        
+        // 清空数组
+        latitudeLines = [];
+        
+        // 重新添加所有纬线
+        addLatitudeLine(0);      // 赤道
+        addLatitudeLine(23.44);  // 北回归线
+        addLatitudeLine(-23.44); // 南回归线
+        addLatitudeLine(66.56);  // 北极圈
+        addLatitudeLine(-66.56); // 南极圈
+      }
+
+      // 添加赤道、回归线和极圈
+      addLatitudeLine(0);      // 赤道
+      addLatitudeLine(23.44);  // 北回归线
+      addLatitudeLine(-23.44); // 南回归线
+      addLatitudeLine(66.56);  // 北极圈
+      addLatitudeLine(-66.56); // 南极圈
+
+      // ---------- 4. UI交互绑定（修复无响应） ----------
+      const daySlider2 = document.getElementById('daySlider2');
+      const timeInput = document.getElementById('timeInput');
+      const latView = document.getElementById('latView');
+      const syncBtn = document.getElementById('syncBtn');
+      const illumText = document.getElementById('illumText');
+
+      // （1）图二滑条交互（独立调节+同步图一）
+      daySlider2.addEventListener('input', (e) => {
+        const day = +e.target.value;
+        const hour = +timeInput.value;
+        // 同步图一
+        window.updateFromDay(day);
+        // 更新自身显示
+        document.getElementById('dateDisplay2').textContent = window.dayToDate(day);
+        // 更新光照
+        updateGlobeState(day, hour);
+      });
+
+      // （2）时间调节（回车更新昼夜）
+      timeInput.addEventListener('change', () => {
+        const hour = Math.max(0, Math.min(23, +timeInput.value));
+        timeInput.value = hour;
+        updateGlobeState(+daySlider2.value, hour);
+      });
+
+      // （3）视角切换（实时更新相机位置）
+      latView.addEventListener('change', () => {
+        const lat = +latView.value;
+        const phi = window.rad(90 - lat);
+        const radius = 4.0;
+        camera.position.set(
+          radius * Math.sin(phi) * Math.cos(0),
+          radius * Math.cos(phi),
+          radius * Math.sin(phi) * Math.sin(0)
+        );
+        camera.lookAt(0, 0, 0);
+        controls.update();
+      });
+
+      // （4）强制同步按钮（解决偶发不同步）
+      syncBtn.addEventListener('click', () => {
+        const day = +document.getElementById('daySlider1').value;
+        daySlider2.value = day;
+        document.getElementById('dateDisplay2').textContent = window.dayToDate(day);
+        updateGlobeState(day, +timeInput.value);
+      });
+
+      // （5）监听图一更新事件（自动同步）
+      window.addEventListener('date-updated', (e) => {
+        updateGlobeState(e.detail.day, e.detail.hour);
+      });
+
+      // ---------- 5. 核心修复：太阳光方向计算与更新 ----------
+      function updateGlobeState(day, hour) {
+        // 1. 重新计算太阳光方向（关键修复：修正经纬度转向量逻辑）
+        const decl = window.solarDeclination(day); // 太阳赤纬（纬度）
+        const sunLon = -((hour - 12) * 15); // 太阳经度（每小时转15°）
+        // 经纬度转三维向量（修正theta计算，确保方向正确）
+        const phi = window.rad(90 - decl); // 极角（从Y轴正方向）
+        const theta = window.rad(sunLon + 180); // 方位角（从X轴正方向）
+        const sunVec = new THREE.Vector3(
+          Math.sin(phi) * Math.cos(theta),
+          Math.cos(phi),
+          Math.sin(phi) * Math.sin(theta)
+        ).normalize();
+
+        // 2. 更新平行光方向
+        sunLight.position.copy(sunVec.clone().multiplyScalar(10)); // 光源放远处（模拟平行光）
+
+        // 3. 更新黑夜层方向（确保始终背对太阳）
+        nightMesh.lookAt(sunLight.position);
+
+        // 4. 更新纬线昼夜分界
+        updateLatitudeLines();
+
+        // 5. 更新光照说明文本（增强可读性）
+        let illumDesc = `太阳赤纬 ${decl.toFixed(2)}°。`;
+        if (decl > 66.56) {
+          illumDesc += '北极圈全天极昼，南极圈全天极夜。';
+        } else if (decl < -66.56) {
+          illumDesc += '南极圈全天极昼，北极圈全天极夜。';
+        } else if (Math.abs(decl) < 0.5) {
+          illumDesc += '全球昼夜近似等长（春分/秋分附近）。';
+        } else {
+          illumDesc += `${decl > 0 ? '北半球' : '南半球'}昼长夜短。`;
+        }
+        illumText.textContent = illumDesc;
+
+        // 6. 强制渲染（避免延迟）
+        renderer.render(scene, camera);
+      }
+
+      // ---------- 6. 动画循环（确保交互流畅） ----------
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update(); // 实时响应鼠标拖动
+        renderer.render(scene, camera);
+      }
+
+      // ---------- 7. 窗口适配（避免 resize 后错位） ----------
+      window.addEventListener('resize', () => {
+        const newWidth = container.clientWidth;
+        renderer.setSize(newWidth, height);
+        camera.aspect = newWidth / height;
+        camera.updateProjectionMatrix();
+        renderer.render(scene, camera);
+      });
+
+      // ---------- 8. 初始化地球状态 ----------
+      updateGlobeState(80, 12);
+      animate(); // 启动动画循环
+    }
+  </script>
+</body>
+</html>
